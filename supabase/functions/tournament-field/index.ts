@@ -1,147 +1,85 @@
-import { createClient } from 'npm:@supabase/supabase-js@2.39.7';
+async function fetchTournamentData(url: string): Promise<any[]> {
+  const MAX_RETRIES = 3;
+  const RETRY_DELAY_MS = 2000;
+  let attempt = 0;
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-};
+  while (attempt < MAX_RETRIES) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
 
-// Tournament URLs and API endpoints with specific tournament IDs
-const TOURNAMENT_URLS = {
-  masters: 'https://site.api.espn.com/apis/site/v2/sports/golf/pga/scoreboard/401556393',
-  pga: 'https://site.api.espn.com/apis/site/v2/sports/golf/pga/scoreboard/401556394',
-  us_open: 'https://site.api.espn.com/apis/site/v2/sports/golf/pga/scoreboard/401556395',
-  the_open: 'https://site.api.espn.com/apis/site/v2/sports/golf/pga/scoreboard/401556396',
-  rbc_heritage: 'https://site.api.espn.com/apis/site/v2/sports/golf/pga/scoreboard' // Current tournament
-};
+      const response = await fetch(url, {
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (compatible; GolfApp/1.0)'
+        },
+        signal: controller.signal
+      });
 
-// List of players who have missed the cut with their final scores
-const MISSED_CUT_PLAYERS = {
-  // This will be populated once the tournament starts and players miss the cut
-};
+      clearTimeout(timeoutId);
 
-function normalizeName(name: string): string {
-  return name.toLowerCase()
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim();
-}
+      if (!response.ok) {
+        // Log the error and throw to trigger retry
+        const errorText = await response.text();
+        console.error(`HTTP error: ${response.status} - ${errorText}`);
+        throw new Error(`HTTP error: ${response.status}`);
+      }
 
-function parseScore(score: string): number {
-  if (!score) return 0;
-  if (score === 'E') return 0;
-  return parseInt(score.replace('+', '').replace('-', '')) * (score.includes('+') ? 1 : -1);
-}
+      const data = await response.json();
+      if (!data || !data.events) {
+        // Log the error and throw to trigger retry
+        console.error('Invalid data structure:', data);
+        throw new Error('Invalid data structure');
+      }
 
-async function fetchTournamentData(url: string) {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const players: any[] = [];
+      for (const event of data.events) {
+        for (const competition of event.competitions || []) {
+          for (const player of competition.competitors || []) {
+            try {
+              const displayName = player.athlete.displayName;
+              const normalizedName = displayName.toLowerCase().trim();
+              const currentScore = (player.score || 'E').toString().trim();
 
-    const response = await fetch(url, {
-      headers: {
-        'Accept': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (compatible; GolfApp/1.0)'
-      },
-      signal: controller.signal
-    });
-    
-    clearTimeout(timeoutId);
-    
-    if (!response.ok) {
-      return [];
-    }
-    
-    const data = await response.json();
-    if (!data || !data.events) {
-      return [];
-    }
-
-    const players: any[] = [];
-    for (const event of data.events || []) {
-      for (const competition of event.competitions || []) {
-        for (const player of competition.competitors || []) {
-          try {
-            const displayName = player.athlete.displayName;
-            const normalizedName = normalizeName(displayName);
-            const missedCut = normalizedName in MISSED_CUT_PLAYERS;
-            
-            const currentScore = missedCut 
-              ? MISSED_CUT_PLAYERS[normalizedName]
-              : (player.score || 'E').toString().trim();
-
-            players.push({
-              id: normalizedName.replace(/\s+/g, '_'),
-              name: displayName,
-              position: player.status?.position?.displayValue || (missedCut ? 'CUT' : 'N/A'),
-              current_score: currentScore,
-              today: player.linescores?.[0]?.value || 'E',
-              thru: player.status?.thru || '',
-              missed_cut: missedCut,
-              world_ranking: player.statistics?.find((s: any) => s.name === 'world_ranking')?.value || 0
-            });
-          } catch (error) {
-            console.error('Error processing player:', error);
+              players.push({
+                id: normalizedName.replace(/\s+/g, '_'),
+                name: displayName,
+                position: player.status?.position?.displayValue || 'N/A',
+                current_score: currentScore,
+                today: player.linescores?.[0]?.value || 'E',
+                thru: player.status?.thru || '',
+                world_ranking: player.statistics?.find((s: any) => s.name === 'world_ranking')?.value || 0
+              });
+            } catch (playerError) {
+              console.error('Error processing player:', playerError);
+            }
           }
         }
       }
-    }
 
-    return players.sort((a, b) => {
-      const scoreA = parseScore(a.current_score);
-      const scoreB = parseScore(b.current_score);
-      return scoreA - scoreB;
-    });
-  } catch (error) {
-    console.error('Error fetching tournament data:', error);
-    return [];
+      // Sort players by score
+      players.sort((a, b) => {
+        const scoreA = a.current_score === 'E' ? 0 : parseInt(a.current_score);
+        const scoreB = b.current_score === 'E' ? 0 : parseInt(b.current_score);
+        return scoreA - scoreB;
+      });
+
+      // Success! Return the processed player list
+      return players;
+    } catch (error) {
+      attempt++;
+      console.error(`Fetch attempt ${attempt} failed:`, error);
+
+      if (attempt < MAX_RETRIES) {
+        // Wait before retrying
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+      } else {
+        // All retries failed, log and return last known good data or empty array
+        console.error('All fetch attempts failed. Returning empty player list.');
+        return []; // Or you could return cached data if you have it
+      }
+    }
   }
+  // Fallback, should never reach here
+  return [];
 }
-
-Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
-
-  try {
-    const url = new URL(req.url);
-    const tournament = url.searchParams.get('tournament');
-
-    if (!tournament || !TOURNAMENT_URLS[tournament as keyof typeof TOURNAMENT_URLS]) {
-      throw new Error('Invalid tournament type');
-    }
-
-    const tournamentUrl = TOURNAMENT_URLS[tournament as keyof typeof TOURNAMENT_URLS];
-    const players = await fetchTournamentData(tournamentUrl);
-
-    return new Response(
-      JSON.stringify({ 
-        success: true,
-        players: players || [] 
-      }),
-      {
-        headers: {
-          ...corsHeaders,
-          'Content-Type': 'application/json',
-        },
-      },
-    );
-  } catch (error) {
-    console.error('Tournament field function error:', error);
-    
-    return new Response(
-      JSON.stringify({ 
-        success: false,
-        error: error.message || 'Failed to fetch tournament data',
-        players: [] 
-      }),
-      {
-        status: 200,
-        headers: {
-          ...corsHeaders,
-          'Content-Type': 'application/json',
-        },
-      },
-    );
-  }
-});
