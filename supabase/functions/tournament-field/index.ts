@@ -1,85 +1,74 @@
-async function fetchTournamentData(url: string): Promise<any[]> {
-  const MAX_RETRIES = 3;
-  const RETRY_DELAY_MS = 2000;
-  let attempt = 0;
+const CACHE_TTL = 30000;
+let lastFetchTime = 0;
+let cachedData = [];
 
-  while (attempt < MAX_RETRIES) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+function safeParseScore(score) {
+  if (!score || score === 'E') return 0;
+  const parsed = parseInt(score, 10);
+  return isNaN(parsed) ? 0 : parsed;
+}
 
-      const response = await fetch(url, {
-        headers: {
-          'Accept': 'application/json',
-          'User-Agent': 'Mozilla/5.0 (compatible; GolfApp/1.0)'
-        },
-        signal: controller.signal
-      });
+async function fetchTournamentData(url) {
+  if (Date.now() - lastFetchTime < CACHE_TTL && cachedData.length > 0) {
+    return cachedData;
+  }
 
-      clearTimeout(timeoutId);
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-      if (!response.ok) {
-        // Log the error and throw to trigger retry
-        const errorText = await response.text();
-        console.error(`HTTP error: ${response.status} - ${errorText}`);
-        throw new Error(`HTTP error: ${response.status}`);
-      }
+    const response = await fetch(url, {
+      headers: { 'Accept': 'application/json' },
+      signal: controller.signal
+    });
 
-      const data = await response.json();
-      if (!data || !data.events) {
-        // Log the error and throw to trigger retry
-        console.error('Invalid data structure:', data);
-        throw new Error('Invalid data structure');
-      }
+    clearTimeout(timeoutId);
 
-      const players: any[] = [];
-      for (const event of data.events) {
-        for (const competition of event.competitions || []) {
-          for (const player of competition.competitors || []) {
-            try {
-              const displayName = player.athlete.displayName;
-              const normalizedName = displayName.toLowerCase().trim();
-              const currentScore = (player.score || 'E').toString().trim();
+    if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
 
-              players.push({
-                id: normalizedName.replace(/\s+/g, '_'),
-                name: displayName,
-                position: player.status?.position?.displayValue || 'N/A',
-                current_score: currentScore,
-                today: player.linescores?.[0]?.value || 'E',
-                thru: player.status?.thru || '',
-                world_ranking: player.statistics?.find((s: any) => s.name === 'world_ranking')?.value || 0
-              });
-            } catch (playerError) {
-              console.error('Error processing player:', playerError);
-            }
+    const data = await response.json();
+    if (!data || !data.events) throw new Error('Invalid data structure');
+
+    const players = [];
+    for (const event of data.events) {
+      if (!event.competitions) continue;
+      for (const competition of event.competitions) {
+        if (!competition.competitors) continue;
+        for (const player of competition.competitors) {
+          try {
+            const displayName = player.athlete && player.athlete.displayName ? player.athlete.displayName : 'Unknown';
+            const normalizedName = displayName.toLowerCase().trim();
+            const currentScore = player.score !== undefined && player.score !== null ? player.score.toString().trim() : 'E';
+
+            players.push({
+              id: normalizedName.replace(/\s+/g, '_'),
+              name: displayName,
+              position: player.status && player.status.position && player.status.position.displayValue ? player.status.position.displayValue : 'N/A',
+              current_score: currentScore,
+              today: Array.isArray(player.linescores) && player.linescores.length > 0 && player.linescores[0].value ? player.linescores[0].value : 'E',
+              thru: player.status && player.status.thru ? player.status.thru : '',
+              world_ranking: Array.isArray(player.statistics) ? ((player.statistics.find(function (s) { return s.name === 'world_ranking'; }) || {}).value || 0) : 0
+            });
+          } catch (playerError) {
+            console.error('Error processing player:', playerError);
           }
         }
       }
-
-      // Sort players by score
-      players.sort((a, b) => {
-        const scoreA = a.current_score === 'E' ? 0 : parseInt(a.current_score);
-        const scoreB = b.current_score === 'E' ? 0 : parseInt(b.current_score);
-        return scoreA - scoreB;
-      });
-
-      // Success! Return the processed player list
-      return players;
-    } catch (error) {
-      attempt++;
-      console.error(`Fetch attempt ${attempt} failed:`, error);
-
-      if (attempt < MAX_RETRIES) {
-        // Wait before retrying
-        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
-      } else {
-        // All retries failed, log and return last known good data or empty array
-        console.error('All fetch attempts failed. Returning empty player list.');
-        return []; // Or you could return cached data if you have it
-      }
     }
+
+    players.sort((a, b) => {
+      const scoreA = safeParseScore(a.current_score);
+      const scoreB = safeParseScore(b.current_score);
+      return scoreA - scoreB;
+    });
+
+    lastFetchTime = Date.now();
+    cachedData = players;
+
+    return players;
+  } catch (error) {
+    console.error('Fetch error:', error);
+    if (cachedData.length > 0) return cachedData;
+    return [];
   }
-  // Fallback, should never reach here
-  return [];
 }

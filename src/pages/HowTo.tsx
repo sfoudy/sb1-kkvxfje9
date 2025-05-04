@@ -11,7 +11,7 @@ export default function HowTo() {
           <GolfBall className="mx-auto h-16 w-16 text-green-600" />
           <h1 className="mt-4 text-4xl font-bold text-gray-900">How To Play</h1>
           <p className="mt-2 text-lg text-gray-600">
-            Your guide to running a successful golf sweepstakes
+            Your guide to running a successful golf pools
           </p>
         </div>
 

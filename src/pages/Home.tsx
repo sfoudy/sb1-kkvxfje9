@@ -9,10 +9,10 @@ const Home = () => {
         <div className="text-center">
           <GolfBall className="mx-auto h-16 w-16 text-green-600" />
           <h1 className="mt-4 text-4xl font-bold text-gray-900 sm:text-5xl">
-            Golf Majors Sweepstakes
+            Golf Major Pools
           </h1>
           <p className="mt-4 text-xl text-gray-600">
-            Create and manage golf sweepstakes for all major tournaments
+            Create and manage golf pools for all major tournaments
           </p>
         </div>
 
@@ -22,7 +22,7 @@ const Home = () => {
               <Trophy className="h-12 w-12 text-green-600 mb-4" />
               <h3 className="text-xl font-semibold text-gray-900">Major Tournaments</h3>
               <p className="mt-2 text-gray-600">
-                Create sweepstakes for The Masters, PGA Championship, US Open, and The Open
+                Create pools for The Masters, PGA Championship, US Open, and The Open
               </p>
             </div>
 
